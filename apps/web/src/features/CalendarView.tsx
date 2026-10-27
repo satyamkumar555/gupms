@@ -1,0 +1,12 @@
+"use client";
+import { useState } from "react"; import { ChevronLeft, ChevronRight } from "lucide-react"; import { Badge, Card, Table, useLoad } from "@/components/ui";
+export function CalendarView({ go }: any) {
+  const { d } = useLoad<any[]>("/calendar", []), [cur, setCur] = useState(() => { const n = new Date(); return new Date(n.getFullYear(), n.getMonth(), 1); });
+  const y = cur.getFullYear(), mo = cur.getMonth(), days = new Date(y, mo + 1, 0).getDate(), pad = cur.getDay(), iso = (n: number) => `${y}-${String(mo + 1).padStart(2, "0")}-${String(n).padStart(2, "0")}`;
+  const on = (n: number) => d.filter((x) => x.startDate <= iso(n) && x.endDate >= iso(n));
+  return <div className="space-y-4"><Card title="Drive Calendar (all officers' drives are locked automatically)" action={<><button className="btn-o btn-sm" onClick={() => setCur(new Date(y, mo - 1, 1))}><ChevronLeft className="h-4 w-4" /></button><span className="self-center text-sm font-semibold">{cur.toLocaleString("en", { month: "long", year: "numeric" })}</span><button className="btn-o btn-sm" onClick={() => setCur(new Date(y, mo + 1, 1))}><ChevronRight className="h-4 w-4" /></button></>}>
+    <div className="grid grid-cols-7 gap-px overflow-hidden rounded-lg border bg-slate-200 text-xs">{["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((w) => <div key={w} className="bg-slate-50 p-1.5 text-center font-semibold text-slate-500">{w}</div>)}
+      {Array.from({ length: pad }).map((_, i) => <div key={"p" + i} className="bg-white" />)}
+      {Array.from({ length: days }, (_, i) => i + 1).map((n) => <div key={n} className="min-h-24 bg-white p-1"><p className="text-right text-slate-400">{n}</p>{on(n).map((e) => <button key={e.id} onClick={() => go("drives/" + e.id)} className={`mb-0.5 block w-full truncate rounded px-1 py-0.5 text-left ${e.status === "Approved" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}`} title={`${e.company} · ${e.courses}`}>{e.company}</button>)}</div>)}</div></Card>
+    <Card title="All scheduled drives"><Table rows={[...d].sort((a, b) => a.startDate.localeCompare(b.startDate))} csv="drive-calendar" cols={[{ h: "Date", r: (x) => `${x.startDate} → ${x.endDate}`, csv: (x) => x.startDate }, { h: "Company", r: (x) => x.company }, { h: "Spoc", r: (x) => x.spocName }, { h: "Course", r: (x) => x.courses }, { h: "No. of Students", r: (x) => x.students }, { h: "Officer", r: (x) => x.officer }, { h: "Status", r: (x) => <Badge>{x.status}</Badge>, csv: (x) => x.status }]} /></Card></div>;
+}

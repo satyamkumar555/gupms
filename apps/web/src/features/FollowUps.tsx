@@ -1,0 +1,8 @@
+"use client";
+import { api } from "@/lib/api"; import { Badge, Card, Fld, Table, useForm, useLoad, useMsg } from "@/components/ui";
+export function FollowUps() {
+  const { d, reload } = useLoad<any[]>("/followups", []), co = useLoad<any[]>("/companies", []), { f, set, reset } = useForm<any>({ date: new Date().toISOString().slice(0, 10) }), m = useMsg();
+  const add = async (e: any) => { e.preventDefault(); try { await api("/followups", "POST", f); reset(); reload(); m.ok("Follow-up saved"); } catch (x: any) { m.err(x.message); } };
+  return <div className="space-y-4"><Card title="New follow-up (client communication with SPOC person)"><form onSubmit={add} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-5"><Fld label="Company" k="company" f={f} set={set} opts={co.d.map((c) => c.name)} req /><Fld label="Spoc / Contact person" k="contact" f={f} set={set} /><Fld label="Date" k="date" type="date" f={f} set={set} req /><Fld label="Next follow-up" k="nextDate" type="date" f={f} set={set} /><Fld label="Notes" k="note" f={f} set={set} req /><div className="flex items-end gap-2"><button className="btn">Add</button></div></form>{m.view}</Card>
+    <Card title="My Follow-ups"><Table rows={d} csv="followups" cols={[{ h: "Company", r: (x) => x.company }, { h: "Contact", r: (x) => x.contact }, { h: "Date", r: (x) => x.date }, { h: "Note", r: (x) => x.note }, { h: "Next", r: (x) => x.nextDate || "—" }, { h: "Status", r: (x) => <Badge>{x.status}</Badge>, csv: (x) => x.status }, { h: "", r: (x) => x.status === "Open" && <button className="btn-o btn-sm" onClick={async () => { await api("/followups/" + x.id, "PUT", { status: "Done" }); reload(); }}>Mark done</button>, csv: () => "" }]} /></Card></div>;
+}

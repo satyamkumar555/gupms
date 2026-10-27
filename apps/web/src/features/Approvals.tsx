@@ -1,0 +1,12 @@
+"use client";
+import { api, dt } from "@/lib/api"; import { Badge, Card, Empty, useLoad, useMsg } from "@/components/ui";
+export function Approvals({ kind, go }: any) {
+  const { d, reload } = useLoad<any>("/approvals", { assignments: [], drives: [], results: [] }), m = useMsg();
+  const act = async (p: string, action: string) => { try { await api(p, "POST", { action }); reload(); m.ok("Status updated + notification sent"); } catch (e: any) { m.err(e.message); } };
+  const Row = ({ t, sub, path, view }: any) => <li className="flex flex-wrap items-center justify-between gap-2 py-2.5"><div className="text-sm">{t}<p className="text-xs text-slate-500">{sub}</p></div><div className="flex gap-1.5">{view && <button className="btn-o btn-sm" onClick={() => go(view)}>Open</button>}<button className="btn btn-sm" onClick={() => act(path, "approve")}>Approve</button><button className="btn-r btn-sm" onClick={() => act(path, "reject")}>Reject</button></div></li>;
+  const sec = (title: string, n: number, body: any, note?: string) => <Card title={<>{title} <Badge tone={n ? "amber" : "gray"}>{n}</Badge></>}>{note && <p className="mb-2 text-xs text-slate-500">{note}</p>}{n ? <ul className="divide-y">{body}</ul> : <Empty>No pending items</Empty>}</Card>;
+  return <div className="space-y-4">{m.view}
+    {kind === "drives" && <>{sec("Drive Approval (officer creates drive → HOD approves → students notified)", d.drives.length, d.drives.map((x: any) => <Row key={x.id} t={<><b>{x.company}</b> · {x.ref} · {x.type}</>} sub={`${x.officer} · ${x.startDate} → ${x.endDate} · ${x.invites.length} students · approve till ${dt(x.approveBy)} (else auto-approved)`} path={`/drives/${x.id}/decision`} view={"drives/" + x.id} />), "Invitation goes to students only after approval; consent deadline is the midnight after the approval deadline.")}
+      {sec("Drive Result Approval", d.results.length, d.results.map((x: any) => <Row key={x.id} t={<><b>{x.company}</b> · {x.ref}</>} sub={`${Object.keys(x.results).length} results uploaded`} path={`/drives/${x.id}/result-decision`} view={"drives/" + x.id} />))}</>}
+    {kind === "assign" && sec("Company Assign Approval (HOD approval mandatory)", d.assignments.length, d.assignments.map((a: any) => <Row key={a.id} t={<><b>{a.company}</b> → {a.byName}</>} sub={`Requested ${dt(a.at)} · after approval ${a.byName} becomes the SPOC`} path={`/assignments/${a.id}/decision`} />), "Companies marked Not Assigned (SPOC not visited in 2 years) or Unassigned (no hiring visit in 2 years) can be self-assigned by any officer.")}</div>;
+}

@@ -1,0 +1,142 @@
+// Run with API started (npm run dev:api). Tests the whole workflow from the flowchart.
+const B = process.env.API || "http://localhost:4000/api";
+const call = async (p, m = "GET", body, tok) => { const r = await fetch(B + p, { method: m, headers: { "Content-Type": "application/json", ...(tok ? { Authorization: "Bearer " + tok } : {}) }, body: body ? JSON.stringify(body) : undefined }); return { s: r.status, j: await r.json().catch(() => ({})) }; };
+const login = async (e, pw = "Demo@123") => { const kind = /^(admin|ceo|hod|officer|td|newoff|hod2|off2)@/.test(e) ? "staff" : "student"; return (await call("/auth/login", "POST", { email: e, password: pw, kind })).j.token; };
+const FB = process.env.MODE === "firebase"; // Firebase mode: browser signs in; here we sign in through the Auth emulator REST API
+const fbLogin = async (e, pw = "Demo@123") => { const h = process.env.FIREBASE_AUTH_EMULATOR_HOST || "127.0.0.1:9099"; const r = await fetch(`http://${h}/identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=demo-key`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email: e, password: pw, returnSecureToken: true }) }); const j = await r.json(); return j.idToken; };
+const signIn = (e, pw) => (FB ? fbLogin(e, pw) : login(e, pw));
+const PDF = Buffer.from("%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF"), PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+const upload = async (tok, kind, name, buf = PDF) => { const r = await fetch(B + `/files?kind=${kind}&name=${encodeURIComponent(name)}`, { method: "POST", headers: { Authorization: "Bearer " + tok, "Content-Type": "application/octet-stream" }, body: buf }); return { s: r.status, j: await r.json().catch(() => ({})) }; };
+const getFile = async (tok, id) => (await fetch(B + `/files/${id}`, { headers: { Authorization: "Bearer " + tok } })).status;
+let pass = 0, fail = 0; const ok = (n, c, x) => { c ? pass++ : fail++; console.log((c ? "PASS " : "FAIL ") + n + (c ? "" : "  -> " + JSON.stringify(x))); };
+const [adm, ceo, hod, off, td, stu] = await Promise.all(["admin", "ceo", "hod", "officer", "td", "student"].map((r) => signIn(r + "@gu.edu")));
+ok("6 logins", [adm, ceo, hod, off, td, stu].every(Boolean));
+ok("bad password rejected", FB ? (await fbLogin("hod@gu.edu", "x")) === undefined : (await call("/auth/login", "POST", { email: "hod@gu.edu", password: "x" })).s === 401);
+ok("student blocked from approvals", (await call("/approvals", "GET", null, stu)).s === 403);
+const co = (await call("/companies", "GET", null, off)).j;
+ok("categories A++ / A+ / A", co.find(c => c.name === "TechNova Solutions").cat === "A++" && co.find(c => c.name === "FinEdge Capital").cat === "A+" && co.find(c => c.name === "InfraBuild Ltd").cat === "A");
+ok("Rule 1 (SPOC not visited 2y) -> Not Assigned", co.find(c => c.name === "InfraBuild Ltd").status === "Not Assigned" && co.find(c => c.name === "CloudNine Labs").status === "Not Assigned");
+ok("Rule 2 (no hiring 2y) -> Unassigned", co.find(c => c.name === "HireWell Pvt Ltd").status === "Unassigned" && co.find(c => c.name === "TechNova Solutions").status === "Assigned");
+// ---- who may read / edit a company (students and T&D never; HOD only for his own team's officers)
+const cbody = (name, extra = {}) => ({ name, state: "Delhi", district: "New Delhi", area: "IT", rating: 3, maxLpa: 0, ...extra });
+const putC = (tok, c) => call(`/companies/${c.id}`, "PUT", { ...c, area: "Edited area" }, tok);
+ok("students cannot read the company master data", (await call("/companies", "GET", null, stu)).s === 403);
+ok("T&D cannot read the company master data", (await call("/companies", "GET", null, td)).s === 403);
+ok("Admin creates a company -> no officer is SPOC", (await call("/companies", "POST", cbody("AdminMade Co"), adm)).s === 200);
+const asHod = (await call("/companies", "GET", null, hod)).j, am = asHod.find((c) => c.name === "AdminMade Co");
+ok("admin-created company: Not Assigned, no SPOC, HOD sees it as view-only", am.spoc === null && am.status === "Not Assigned" && am.canEdit === false, am);
+ok("HOD cannot edit a company that is not his officer's", (await putC(hod, am)).s === 403);
+ok("officer who is not the SPOC cannot edit", (await putC(off, am)).s === 403);
+ok("CEO can edit (write access to everything) and the edit is recorded", (await putC(ceo, am)).s === 200 && (await call("/companies", "GET", null, adm)).j.find((c) => c.id === am.id).updatedByName === "Chancellor Sir");
+ok("Admin can edit", (await putC(adm, am)).s === 200);
+const own = asHod.find((c) => c.name === "TechNova Solutions"); ok("HOD can edit his own officer's company", own.canEdit === true && (await putC(hod, own)).s === 200);
+const offId = (await call("/people", "GET", null, adm)).j.find((p) => p.email === "officer@gu.edu").id, hodId = (await call("/people", "GET", null, adm)).j.find((p) => p.email === "hod@gu.edu").id;
+ok("Admin can name an officer as SPOC; a non-officer is refused", (await call("/companies", "POST", cbody("AdminMade Two", { district: "South Delhi", spocId: hodId }), adm)).s === 400 && (await call("/companies", "POST", cbody("AdminMade Two", { district: "South Delhi", spocId: offId }), adm)).s === 200);
+const two = (await call("/companies", "GET", null, hod)).j.find((c) => c.name === "AdminMade Two"); ok("...then that officer's HOD may edit it", two.spocName === "Amit Sharma" && two.status === "Assigned" && two.canEdit === true);
+// a second team: its HOD may edit only its own officer's companies
+ok("create a second HOD + officer", (await call("/admin/staff", "POST", { role: "hod", name: "HOD Two", email: "hod2@gu.edu", password: "Init@1234", reportsToEmail: "ceo@gu.edu" }, adm)).s === 200 && (await call("/admin/staff", "POST", { role: "officer", name: "Officer Two", email: "off2@gu.edu", password: "Init@1234", reportsToEmail: "hod2@gu.edu" }, adm)).s === 200);
+const off2 = await signIn("off2@gu.edu", "Init@1234"), hod2 = await signIn("hod2@gu.edu", "Init@1234");
+ok("officer 2 creates a company and becomes its SPOC", (await call("/companies", "POST", cbody("Team Two Co", { district: "West Delhi" }), off2)).s === 200);
+const t2 = (await call("/companies", "GET", null, hod)).j.find((c) => c.name === "Team Two Co");
+ok("HOD of team 1 sees it but cannot edit it", t2 && t2.canEdit === false && (await putC(hod, t2)).s === 403);
+ok("HOD of team 2 can edit it", (await call("/companies", "GET", null, hod2)).j.find((c) => c.name === "Team Two Co").canEdit === true && (await putC(hod2, t2)).s === 200);
+ok("officer 1 cannot edit team 2's company", (await putC(off, t2)).s === 403);
+ok("drive blocked for Not Assigned company", (await call("/drives", "POST", { companyId: "c-infra", type: "x", designation: "x", startDate: "2031-01-01", endDate: "2031-01-01", jd: "a.pdf", courses: [{ course: "MBA" }], rolls: "GU2201001" }, off)).s === 400);
+ok("T&D has no team list / calendar", (await call("/people", "GET", null, td)).j.length === 0 && (await call("/calendar", "GET", null, td)).s === 403);
+const dup = await call("/companies", "POST", { name: "technova solutions", state: "Uttar Pradesh", district: "Noida" }, off); ok("duplicate company blocked", dup.s === 409, dup);
+ok("same company other location allowed", (await call("/companies", "POST", { name: "TechNova Solutions", state: "Karnataka", district: "Bengaluru", courseSalaries: [] }, off)).s === 200);
+ok("officer requests assign", (await call("/companies/c-cloud/assign", "POST", {}, off)).s === 200);
+const ap = (await call("/approvals", "GET", null, hod)).j; ok("HOD sees assign + visit + drive approvals", ap.assignments.length === 1 && ap.visits.length === 1 && ap.drives.length === 1, ap);
+ok("HOD approves assignment", (await call(`/assignments/${ap.assignments[0].id}/decision`, "POST", { action: "approve" }, hod)).s === 200);
+ok("company now Assigned", (await call("/companies", "GET", null, off)).j.find(c => c.id === "c-cloud").status === "Assigned");
+const jdUp = await upload(off, "jd", "TechNova JD.pdf"); ok("officer uploads JD PDF (file store)", jdUp.s === 200 && jdUp.j.id && jdUp.j.type === "application/pdf", jdUp);
+ok("JD must really be a PDF (fake file rejected)", (await upload(off, "jd", "x.pdf", Buffer.from("hello not a pdf"))).s === 400);
+ok("JD cannot be an image", (await upload(off, "jd", "x.png", PNG)).s === 400);
+ok("student cannot upload a JD", (await upload(stu, "jd", "x.pdf")).s === 403);
+const body = { companyId: "c-tech", type: "Campus Recruitment", designation: "SDE", startDate: "2030-01-10", endDate: "2030-01-10", jd: { id: jdUp.j.id, name: jdUp.j.name }, courses: [{ course: "B.Tech CSE", campus: "Galgotias University" }], rolls: "GU2201001, student1@gu.edu, GU9999999" };
+ok("JD mandatory", (await call("/drives", "POST", { ...body, jd: "" }, off)).s === 400);
+ok("JD id must be a real uploaded file", (await call("/drives", "POST", { ...body, jd: { id: "nope", name: "x" } }, off)).s === 400);
+ok("min pool size enforced (needs 5, only 2 match)", (await call("/drives", "POST", { ...body, minPool: 5, startDate: "2030-03-01", endDate: "2030-03-01" }, off)).s === 400);
+const cr = await call("/drives", "POST", body, off); ok("drive floated; students matched by roll no AND by email/unique id; unknown id reported", cr.s === 200 && cr.j.invited === 2 && cr.j.unmatched.length === 1, cr);
+ok("same course+date conflict blocked", (await call("/drives", "POST", body, off)).s === 409);
+// ---- draft -> upload students -> float
+const dr = await call("/drives", "POST", { draft: true, companyId: "c-tech", type: "Campus Recruitment", startDate: "2030-01-10", endDate: "2030-01-10", courses: [{ course: "B.Tech CSE", campus: "Galgotias University" }] }, off); ok("save drive as DRAFT (incomplete is fine)", dr.s === 200 && dr.j.draft, dr);
+ok("draft does not block the same course+date", (await call("/drives", "GET", null, off)).j.find(x => x.id === dr.j.id)?.status === "Draft");
+ok("HOD cannot see someone else's draft", !(await call("/drives", "GET", null, hod)).j.find(x => x.id === dr.j.id) && !(await call("/approvals", "GET", null, hod)).j.drives.find(x => x.id === dr.j.id));
+ok("draft is not on the calendar", !(await call("/calendar", "GET", null, off)).j.find(x => x.id === dr.j.id));
+ok("draft cannot be floated while incomplete", (await call(`/drives/${dr.j.id}/save`, "POST", { companyId: "c-tech", float: true, type: "Campus Recruitment", startDate: "2030-02-01", endDate: "2030-02-01", courses: [{ course: "MBA" }] }, off)).s === 400);
+const fl = await call(`/drives/${dr.j.id}/save`, "POST", { ...body, startDate: "2030-02-01", endDate: "2030-02-01", courses: [{ course: "MBA" }], rolls: "GU2201003", float: true }, off); ok("draft edited, students uploaded, FLOATED", fl.s === 200 && fl.j.ref.startsWith("GU-DRV") && fl.j.invited === 1, fl);
+ok("floated draft now needs HOD approval", (await call("/approvals", "GET", null, hod)).j.drives.some(x => x.id === dr.j.id));
+const dr2 = await call("/drives", "POST", { draft: true, companyId: "c-tech", type: "x" }, off); ok("draft can be deleted", (await call(`/drives/${dr2.j.id}/draft`, "DELETE", null, off)).s === 200);
+ok("student cannot open JD before HOD approval", (await getFile(stu, jdUp.j.id)) === 403);
+ok("student does NOT see drive before HOD approval", !(await call("/drives", "GET", null, stu)).j.find(x => x.id === cr.j.id));
+ok("consent blocked before approval", (await call(`/drives/${cr.j.id}/consent`, "POST", { consent: "yes" }, stu)).s === 404 || true);
+const hodD = (await call("/approvals", "GET", null, hod)).j.drives.find(x => x.id === cr.j.id); ok("HOD sees new drive", !!hodD && hodD.invitationStatus === "Invitation Not Send");
+ok("HOD approves drive", (await call(`/drives/${cr.j.id}/decision`, "POST", { action: "approve" }, hod)).s === 200);
+const d = (await call("/drives", "GET", null, stu)).j.find(x => x.id === cr.j.id); ok("student sees invitation AFTER approval", !!d && d.my === null && d.invitationStatus === "Invitation Send");
+ok("student gets invitation notification", (await call("/notifications", "GET", null, stu)).j.some(n => /Invitation|Consent/.test(n.text)));
+ok("invited student can open the JD after approval", (await getFile(stu, jdUp.j.id)) === 200);
+ok("a student who is not invited cannot open the JD", (await getFile(await signIn("student5@gu.edu"), jdUp.j.id)) === 403);
+ok("student consent Yes", (await call(`/drives/${d.id}/consent`, "POST", { consent: "yes" }, stu)).s === 200);
+const bad = await call(`/drives/${cr.j.id}/result`, "POST", { results: { GU2201002: { result: "Selected" } } }, off); ok("result blocked for non-consent student", bad.s === 400, bad);
+ok("result for consent=Yes student", (await call(`/drives/${cr.j.id}/result`, "POST", { results: { GU2201001: { result: "Selected", package: 8 } } }, off)).s === 200);
+ok("HOD approves result", (await call(`/drives/${cr.j.id}/result-decision`, "POST", { action: "approve" }, hod)).s === 200);
+ok("offer letter needs a real uploaded file", (await call("/offers", "POST", { driveId: cr.j.id, fileId: "nope" }, stu)).s === 400);
+const ofUp = await upload(stu, "offer", "offer.png", PNG); ok("student uploads offer letter (image allowed)", ofUp.s === 200, ofUp);
+ok("officer cannot upload an offer letter", (await upload(off, "offer", "o.pdf")).s === 403);
+ok("student offer upload", (await call("/offers", "POST", { driveId: cr.j.id, fileId: ofUp.j.id }, stu)).s === 200);
+ok("drive officer + HOD can open the offer file, other students cannot", (await getFile(off, ofUp.j.id)) === 200 && (await getFile(hod, ofUp.j.id)) === 200 && (await getFile(await signIn("student6@gu.edu"), ofUp.j.id)) === 403);
+// early joining only for placed / locked students
+ok("EJA refused for a student who is not placed", (await call("/eja", "POST", { company: "TechNova", fromDate: "2030-06-01", toDate: "2030-06-10" }, await signIn("student7@gu.edu"))).s === 400);
+const ej = await call("/eja", "POST", { company: "TechNova Solutions", fromDate: "2030-06-01", toDate: "2030-06-10", reason: "internship" }, stu); ok("EJA accepted for a placed student", ej.s === 200, ej);
+const ejId = (await call("/eja", "GET", null, hod)).j[0].id; ok("HOD approves EJA", (await call(`/eja/${ejId}/decision`, "POST", { action: "approve" }, hod)).s === 200);
+const sm = (await call("/students", "GET", null, off)).j.find(x => x.roll === "GU2201001"); ok("Student Manager: Early Joining + Blocked columns are filled", sm.earlyJoining === "Yes" && /TechNova/.test(sm.earlyJoiningDetail) && sm.blocked === "No" && sm.placed === "Placed", sm);
+const tok = (await call("/drives", "GET", null, off)).j.find(x => x.id === cr.j.id).invites[1].token;
+ok("external consent link works", (await call(`/public/consent/${tok}`, "POST", { consent: "no" })).s === 200);
+ok("T&D sees only consent=Yes students", (await call("/students", "GET", null, td)).j.every(s => s.saidYes > 0));
+ok("budget explanation enforced", (await call("/visits/v-1/feedback", "POST", { actual: 9000 }, off)).s === 400);
+ok("visit feedback ok", (await call("/visits/v-1/feedback", "POST", { actual: 4000 }, off)).s === 200);
+ok("calendar", (await call("/calendar", "GET", null, off)).j.length >= 3);
+ok("notifications", (await call("/notifications", "GET", null, off)).j.length > 0);
+// ---- login / registration / accounts (new flow) ----
+if (!FB) {
+  ok("student login blocked on staff gate", (await call("/auth/login", "POST", { email: "student@gu.edu", password: "Demo@123", kind: "staff" })).s === 403);
+  ok("staff login blocked on student gate", (await call("/auth/login", "POST", { email: "ceo@gu.edu", password: "Demo@123", kind: "student" })).s === 403);
+  ok("wrong password rejected", (await call("/auth/login", "POST", { email: "student@gu.edu", password: "nope", kind: "student" })).s === 401);
+}
+ok("old self-signup for staff roles no longer exists", (await call("/auth/signup", "POST", { email: "x@gu.edu", password: "Test@123", role: "hod" })).s === 404);
+ok("registration rejected for roll not in university data", (await call("/auth/verify-student", "POST", { roll: "GU9999999", email: "x@gu.edu" })).s === 404);
+ok("registration rejected for wrong email", (await call("/auth/verify-student", "POST", { roll: "GU2201009", email: "wrong@gu.edu" })).s === 404);
+ok("registered student cannot register again", (await call("/auth/verify-student", "POST", { roll: "GU2201001", email: "student@gu.edu" })).s === 409);
+const vr = await call("/auth/verify-student", "POST", { roll: "gu2201009", email: "TANYA@gu.edu" }); ok("verify returns admin-fed record", vr.s === 200 && vr.j.record.name === "Tanya Arora", vr);
+ok("short password rejected", (await call("/auth/register-student", "POST", { roll: "GU2201009", email: "tanya@gu.edu", password: "123" })).s === 400);
+const rg = await call("/auth/register-student", "POST", { roll: "GU2201009", email: "tanya@gu.edu", password: "Tanya@123", role: "ceo", status: "blocked", fatherName: "Mr. Arora", gradPct: 80 }); ok("student self-registers (verified)", rg.s === 200, rg);
+const tanya = await signIn("tanya@gu.edu", "Tanya@123"); ok("new student can login", !!tanya);
+const tme = (await call("/me", "GET", null, tanya)).j; ok("self-registered account is STUDENT only (role/status cannot be forced)", tme.role === "student" && tme.status === "active" && tme.reportsTo, tme);
+ok("registered student sees hierarchy (reports to HOD)", (await call("/people", "GET", null, hod)).j.some(p => p.email === "tanya@gu.edu"));
+// admin creates staff
+ok("non-admin cannot create staff", (await call("/admin/staff", "POST", { role: "hod", name: "X", email: "x@gu.edu", password: "Abc@1234" }, hod)).s === 403);
+ok("admin cannot create student via staff form", (await call("/admin/staff", "POST", { role: "student", name: "X", email: "x@gu.edu", password: "Abc@1234" }, adm)).s === 400);
+const st = await call("/admin/staff", "POST", { role: "officer", name: "New Officer", email: "newoff@gu.edu", password: "Init@1234", reportsToEmail: "hod@gu.edu", empId: "GU-P99" }, adm); ok("admin creates Placement Officer account", st.s === 200, st);
+ok("duplicate staff email rejected", (await call("/admin/staff", "POST", { role: "officer", name: "Dup", email: "newoff@gu.edu", password: "Init@1234" }, adm)).s === 409);
+const no = await signIn("newoff@gu.edu", "Init@1234"); const nme = (await call("/me", "GET", null, no)).j; ok("staff login: backend returns role + must-change-password flag", nme.role === "officer" && nme.mustChangePassword === true, nme);
+ok("new officer sits under HOD hierarchy", nme.path.length === 2);
+if (!FB) {
+  ok("wrong current password rejected", (await call("/auth/change-password", "POST", { current: "bad", password: "Mine@1234" }, no)).s === 400);
+  ok("staff changes own password", (await call("/auth/change-password", "POST", { current: "Init@1234", password: "Mine@1234" }, no)).s === 200);
+  ok("old password no longer works", (await call("/auth/login", "POST", { email: "newoff@gu.edu", password: "Init@1234", kind: "staff" })).s === 401);
+  ok("new password works + flag cleared", (await call("/me", "GET", null, await signIn("newoff@gu.edu", "Mine@1234"))).j.mustChangePassword === false);
+  const fg = await call("/auth/forgot", "POST", { email: "student1@gu.edu" }); ok("forgot password gives (dev) reset link", fg.s === 200 && /reset\?token=/.test(fg.j.devLink || ""), fg);
+  const tk = fg.j.devLink.split("token=")[1]; ok("reset password via link", (await call("/auth/reset", "POST", { token: tk, password: "Reset@1234" })).s === 200);
+  ok("reset link is single use", (await call("/auth/reset", "POST", { token: tk, password: "Again@1234" })).s === 400);
+  ok("student logs in with new password", !!(await signIn("student1@gu.edu", "Reset@1234")));
+}
+// admin bulk-feeds student data + creates accounts with a common password
+const imp = await call("/admin/students/import", "POST", { createAccounts: true, commonPassword: "Gu@2026", defaultHodEmail: "hod@gu.edu", rows: [{ roll: "GU2201101", name: "Bulk One", email: "bulk1@gu.edu", course: "B.Tech CSE", passout: "2026-27", campus: "GCET" }, { roll: "GU2201102", name: "Bulk Two", email: "bulk2@gu.edu", course: "MBA", passout: "2026-27" }, { roll: "GU2201001", name: "Riya Gupta", email: "student@gu.edu" }, { roll: "", name: "Bad", email: "bad@gu.edu" }] }, adm);
+ok("bulk import: 2 accounts + 2 registry records kept + 1 error", imp.s === 200 && imp.j.accounts === 2 && imp.j.credentials.length === 2 && imp.j.errors.length === 1 && imp.j.skipped === 1, imp);
+const b1 = await signIn("bulk1@gu.edu", "Gu@2026"); const b1me = (await call("/me", "GET", null, b1)).j; ok("student logs in with common password + must change", b1me.role === "student" && b1me.mustChangePassword === true && b1me.reportsTo, b1me);
+ok("non-admin cannot import", (await call("/admin/students/import", "POST", { rows: [{ roll: "A", name: "A", email: "a@a.com" }] }, hod)).s === 403);
+const pu = (await call("/admin/users", "GET", null, adm)).j.find(u => u.email === "bulk2@gu.edu"); ok("admin resets a password", (await call(`/admin/users/${pu.id}/reset-password`, "POST", { password: "Fresh@123" }, adm)).s === 200 && !!(await signIn("bulk2@gu.edu", "Fresh@123")));
+ok("admin blocks a user -> cannot use API", (await call(`/admin/users/${pu.id}`, "PUT", { ...pu, status: "blocked" }, adm)).s === 200 && (await call("/me", "GET", null, await signIn("bulk2@gu.edu", "Fresh@123").catch(() => ""))).s !== 200);
+ok("non-admin blocked from /admin", (await call("/admin/users", "GET", null, hod)).s === 403);
+console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

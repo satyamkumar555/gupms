@@ -1,0 +1,32 @@
+{
+  "name": "gu-pms",
+  "private": true,
+  "workspaces": [
+    "apps/api"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "install:all": "npm install && npm install --prefix apps/web",
+    "dev": "npm run dev:firebase",
+    "dev:firebase": "concurrently -n api,web -c cyan,green \"npm run dev:firebase -w @gu-pms/api\" \"node scripts/with-env.mjs apps/web/.env.firebase -- npm run dev --prefix apps/web\"",
+    "dev:local": "concurrently -n api,web -c cyan,green \"npm run dev -w @gu-pms/api\" \"npm run dev --prefix apps/web\"",
+    "create-admin:firebase": "node scripts/with-env.mjs apps/api/.env.firebase -- npm run cli -w @gu-pms/api -- create-admin",
+    "remove-demo:firebase": "node scripts/with-env.mjs apps/api/.env.firebase -- npm run cli -w @gu-pms/api -- remove-demo",
+    "emulators": "npx --yes firebase-tools@13 emulators:start --only auth,firestore --project demo-gupms",
+    "test": "node scripts/run-tests.mjs",
+    "typecheck": "npm run typecheck -w @gu-pms/api && npm run typecheck --prefix apps/web",
+    "build": "npm run build:web && npm run build -w @gu-pms/api",
+    "reset-data": "node -e \"require('fs').rmSync('apps/api/.data',{recursive:true,force:true});console.log('local test data cleared')\"",
+    "fix-companies:firebase": "node scripts/with-env.mjs apps/api/.env.firebase -- npm run cli -w @gu-pms/api -- fix-company-owners",
+    "deploy:rules": "npx --yes firebase-tools@13 deploy --only firestore:rules",
+    "build:web": "node scripts/with-env.mjs apps/web/.env.production -- npm run build --prefix apps/web",
+    "deploy": "npx --yes firebase-tools@13 deploy",
+    "deploy:web": "npx --yes firebase-tools@13 deploy --only hosting",
+    "deploy:api": "npx --yes firebase-tools@13 deploy --only functions"
+  },
+  "devDependencies": {
+    "concurrently": "^9.0.1"
+  }
+}

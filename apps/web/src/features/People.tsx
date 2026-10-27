@@ -1,0 +1,9 @@
+"use client";
+import { useAuth } from "@/lib/auth"; import { Badge, Card, Table, useLoad } from "@/components/ui"; import { ChangePassword } from "@/components/ChangePassword";
+const KV = ({ o }: { o: any }) => <div className="grid gap-x-6 gap-y-1 text-sm sm:grid-cols-2 lg:grid-cols-3">{Object.entries(o).filter(([k]) => !["path", "scope", "id", "pw", "reportsTo"].includes(k) && typeof o[k] !== "object").map(([k, v]) => <div key={k} className="flex gap-2 border-b border-slate-100 py-1"><span className="w-40 shrink-0 text-xs text-slate-500">{k}</span><span className="break-all font-medium">{String(v)}</span></div>)}</div>;
+export function People() {
+  const { d } = useLoad<any[]>("/people", []);
+  return <Card title={`My Team & Hierarchy (${d.length})`}><p className="mb-3 text-xs text-slate-500">You see everyone below you in the hierarchy: CEO → HOD → Placement Officers / T&D / Students.</p>
+    <Table rows={d} csv="team" cols={[{ h: "Name", r: (p) => <b>{p.name}</b>, csv: (p) => p.name }, { h: "Role", r: (p) => <Badge tone="blue">{p.role}</Badge>, csv: (p) => p.role }, { h: "Email", r: (p) => p.email }, { h: "Phone", r: (p) => p.phone }, { h: "Dept / Course", r: (p) => p.department || p.course }, { h: "Roll / Emp ID", r: (p) => p.roll || p.empId }, { h: "Status", r: (p) => <Badge>{p.status}</Badge>, csv: (p) => p.status }, { h: "Details", csv: () => "", r: (p) => <details><summary className="cursor-pointer text-navy-700 underline">View</summary><div className="fixed inset-x-4 top-20 z-40 max-h-[70vh] overflow-auto rounded-xl border bg-white p-4 shadow-2xl md:inset-x-24"><p className="mb-2 font-bold">{p.name}</p><KV o={p} /></div></details> }]} /></Card>;
+}
+export function Profile() { const { user } = useAuth(); return <div className="space-y-4"><Card title="My Profile">{user && <KV o={user} />}</Card><Card title="Change password"><div className="max-w-sm"><ChangePassword /></div></Card></div>; }

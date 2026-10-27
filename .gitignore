@@ -1,0 +1,10 @@
+node_modules
+.next
+.data
+*.log
+serviceAccount*.json
+firebase-debug.log
+*-debug.log
+firestore-debug.log
+lib
+out
